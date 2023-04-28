@@ -34,9 +34,6 @@ class Node:
         self.__utxo: List[Transaction] = []
 
         self.__connected_nodes: Set[Node] = set()
-        # self.__unspent_transactions: List[Transaction] = []
-        # self.__last_updated_block_hash: BlockHash = GENESIS_BLOCK_PREV
-        # self.__frozen_transactions: List[Transaction] = []
 
     def connect(self, other: 'Node') -> None:
         """connects this node to another node for block and transaction updates.
@@ -106,10 +103,13 @@ class Node:
         if new_chain:
             old_chain: List[Block] = self.__get_chain_until(new_chain[0])
             if len(new_chain) > len(old_chain):
+                mempool_backup: List[Transaction] = self.__mempool.copy()
                 for block in old_chain:
                     self.__rollback_block(block)
                 for block in new_chain:
                     self.__process_block(block)
+                for tx in mempool_backup:
+                    self.add_transaction_to_mempool(tx)
                 self.__propagate_block(new_chain[-1])
 
     def mine_block(self) -> BlockHash:
@@ -123,7 +123,8 @@ class Node:
         The method returns the new block hash.
         """
         last_index = BLOCK_SIZE - 1 if len(self.__mempool) > BLOCK_SIZE - 1 else len(self.__mempool)
-        new_block: Block = Block(self.get_latest_hash(),self.__mempool[:last_index] + [new_coin_tx(self.get_address())])
+        new_block: Block = Block(self.get_latest_hash(),
+                                 self.__mempool[:last_index] + [new_coin_tx(self.get_address())])
         self.__blockchain.append(new_block)
         self.__propagate_block(new_block)
         self.__mempool = self.__mempool[last_index:]
@@ -281,23 +282,21 @@ class Node:
             return []
         current_block: Block = self.get_block(self.get_latest_hash())
         chain: List[Block] = []
-        while not current_block.get_prev_block_hash()==GENESIS_BLOCK_PREV and not current_block.get_block_hash() == split_block.get_block_hash():
+        while not current_block.get_block_hash() == split_block.get_block_hash():
             chain.append(current_block)
+            if current_block.get_prev_block_hash() == GENESIS_BLOCK_PREV:
+                break
             current_block = self.get_block(current_block.get_prev_block_hash())
         return chain
 
     def __rollback_block(self, block: Block) -> None:
         for canceled_tx in block.get_transactions():
-            for tx in self.__mempool:
-                if tx.input == canceled_tx.get_txid():
-                    self.__mempool.remove(tx)
-                    break
-            for tx in self.__utxo:
-                if tx.input == canceled_tx.get_txid():
-                    self.__utxo.remove(tx)
-                    break
+            self.__mempool = [tx for tx in self.__mempool if tx.input != canceled_tx.get_txid()]
+            self.__utxo = [tx for tx in self.__utxo if
+                           tx.get_txid() != canceled_tx.get_txid() and tx.input != canceled_tx.get_txid()]
             if canceled_tx.input_tx:
                 self.__utxo.append(canceled_tx.input_tx)
+        self.__blockchain.remove(block)
 
     def __process_block(self, new_block: Block) -> None:
         for new_tx in new_block.get_transactions():
