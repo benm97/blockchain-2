@@ -5,6 +5,7 @@ from typing import Set, Optional, List, cast
 from .block import Block
 from .transaction import Transaction
 from .utils import *
+from .virtual_blockchain import VirtualBlockchain
 
 
 def new_coin_tx(target: PublicKey) -> Transaction:
@@ -99,18 +100,14 @@ class Node:
         not conflict.
         """
 
-        new_chain: List[Block] = self.__get_unknown_chain(block_hash, sender)
-        if new_chain:
-            old_chain: List[Block] = self.__get_chain_until(new_chain[0])
-            if len(new_chain) > len(old_chain):
-                mempool_backup: List[Transaction] = self.__mempool.copy()
-                for block in old_chain:
-                    self.__rollback_block(block)
-                for block in new_chain:
-                    self.__process_block(block)
-                for tx in mempool_backup:
-                    self.add_transaction_to_mempool(tx)
-                self.__propagate_block(new_chain[-1])
+        virtual_chain: VirtualBlockchain = VirtualBlockchain(self.__blockchain.copy(), self.__utxo.copy())
+        if len(virtual_chain.attempt_reorg(block_hash, sender)) > len(self.__blockchain):
+            self.__blockchain = virtual_chain.blockchain
+            self.__utxo = virtual_chain.utxo
+            mempool_backup = self.__mempool.copy()
+            self.__mempool = []
+            self.__mempool = [tx for tx in mempool_backup if self.__is_transaction_valid(tx)]
+            self.__propagate_block(self.__blockchain[-1])
 
     def mine_block(self) -> BlockHash:
         """"
@@ -208,7 +205,7 @@ class Node:
 
     def __is_transaction_valid(self, transaction: Transaction) -> bool:  # TODO create money fail
         if transaction.input is None:
-            return True
+            return False
         if transaction.input in [transaction.input for transaction in self.__mempool]:
             return False
         input_transaction: Optional[Transaction] = next(
@@ -234,76 +231,6 @@ class Node:
         new_transactions_input: List[Optional[TxID]] = [transaction.input for transaction in new_transactions]
         self.__utxo = [unspent_transaction for unspent_transaction in self.__utxo if
                        unspent_transaction.get_txid() not in new_transactions_input]
-
-    def __is_known_block(self, block_hash: BlockHash) -> bool:
-        """
-        This function returns a block object given its hash.
-        If the block doesnt exist, a ValueError is raised.
-        """
-        if block_hash == GENESIS_BLOCK_PREV:
-            return True
-        for block in self.__blockchain:
-            if block.get_block_hash() == block_hash:
-                return True
-        return False
-
-    def __get_unknown_chain(self, block_hash: BlockHash, sender: 'Node') -> List[Block]:
-        unknown_chain: List[Block] = []
-        current_block_hash: BlockHash = block_hash
-        while not self.__is_known_block(current_block_hash):
-            unknown_block: Block = sender.get_block(current_block_hash)
-            unknown_chain.append(unknown_block)
-            current_block_hash = unknown_block.get_prev_block_hash()
-            if not self.__validate_block(unknown_block):
-                unknown_chain = []
-                continue
-        unknown_chain.reverse()
-        return unknown_chain
-
-    def __validate_block(self, block: Block) -> bool:
-        if len(block.get_transactions()) > BLOCK_SIZE:
-            return False
-        new_coin_counter = 0
-        for tx in block.get_transactions():
-            if not tx.input:
-                new_coin_counter += 1
-                continue
-            if not self.__validate_tx(tx):
-                return False
-        if new_coin_counter != 1:
-            return False
-        return True
-
-    def __validate_tx(self, transaction: Transaction) -> bool:
-        return True
-
-    def __get_chain_until(self, split_block: Block) -> List[Block]:
-        if self.get_latest_hash() == GENESIS_BLOCK_PREV:
-            return []
-        current_block: Block = self.get_block(self.get_latest_hash())
-        chain: List[Block] = []
-        while not current_block.get_block_hash() == split_block.get_block_hash():
-            chain.append(current_block)
-            if current_block.get_prev_block_hash() == GENESIS_BLOCK_PREV:
-                break
-            current_block = self.get_block(current_block.get_prev_block_hash())
-        return chain
-
-    def __rollback_block(self, block: Block) -> None:
-        for canceled_tx in block.get_transactions():
-            self.__mempool = [tx for tx in self.__mempool if tx.input != canceled_tx.get_txid()]
-            self.__utxo = [tx for tx in self.__utxo if
-                           tx.get_txid() != canceled_tx.get_txid() and tx.input != canceled_tx.get_txid()]
-            if canceled_tx.input_tx:
-                self.__utxo.append(canceled_tx.input_tx)
-        self.__blockchain.remove(block)
-
-    def __process_block(self, new_block: Block) -> None:
-        for new_tx in new_block.get_transactions():
-            if not self.__is_transaction_valid(new_tx):
-                raise Exception("Not valid block")
-        self.__blockchain.append(new_block)
-        self.__update_utxo_with_block(new_block)
 
 
 """
