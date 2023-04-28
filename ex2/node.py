@@ -25,7 +25,7 @@ class Node:
     def __init__(self) -> None:
         """Creates a new node with an empty mempool and no connections to others.
         Blocks mined by this node will reward the miner with a single new coin,
-        created out of thin air and associated with the mining reward address"""  # TODO reward
+        created out of thin air and associated with the mining reward address"""
         keys: Tuple[PrivateKey, PublicKey] = gen_keys()
         self.__private_key: PrivateKey = keys[0]
         self.__public_key: PublicKey = keys[1]
@@ -72,7 +72,7 @@ class Node:
         Transactions that create money (with no inputs) are not placed in the mempool, and not propagated. 
         """
 
-        if self.__is_transaction_valid(transaction):  # TODO create money fail
+        if self.__is_transaction_valid(transaction):
             self.__mempool.append(transaction)
             self.__propagate_tx(transaction)
             return True
@@ -107,6 +107,9 @@ class Node:
             mempool_backup = self.__mempool.copy()
             self.__mempool = []
             self.__mempool = [tx for tx in mempool_backup if self.__is_transaction_valid(tx)]
+            for tx in virtual_chain.deleted_txs:
+                if self.__is_transaction_valid(tx):
+                    self.__mempool.append(tx)
             self.__propagate_block(self.__blockchain[-1])
 
     def mine_block(self) -> BlockHash:
@@ -125,7 +128,7 @@ class Node:
         self.__blockchain.append(new_block)
         self.__propagate_block(new_block)
         self.__mempool = self.__mempool[last_index:]
-        self.__update_utxo_with_block(new_block)  # TODO Update utxo?
+        self.__update_utxo_with_block(new_block)
         return self.get_latest_hash()
 
     def get_block(self, block_hash: BlockHash) -> Block:
@@ -203,7 +206,7 @@ class Node:
         """
         return self.__public_key
 
-    def __is_transaction_valid(self, transaction: Transaction) -> bool:  # TODO create money fail
+    def __is_transaction_valid(self, transaction: Transaction) -> bool:
         if transaction.input is None:
             return False
         if transaction.input in [transaction.input for transaction in self.__mempool]:
