@@ -13,20 +13,22 @@ class VirtualBlockchain:
     def __init__(self, initial_blockchain: List[Block], initial_utxo: List[Transaction]) -> None:
         self.blockchain: List[Block] = initial_blockchain
         self.utxo: List[Transaction] = initial_utxo
+        self.new_chain: List[Block] = []
+        self.old_chain: List[Block] = []
         self.deleted_txs: List[Transaction] = []
 
     def attempt_reorg(self, new_block_hash: BlockHash, sender: 'Node') -> List[Block]:
-        new_chain: List[Block] = self.get_unknown_chain(new_block_hash, sender)
-        if new_chain:
-            old_chain: List[Block] = self.get_chain_until(new_chain[0])
-            if len(new_chain) > len(old_chain):
-                for block in old_chain:
+        split_hash: BlockHash = self.get_split_hash(new_block_hash, sender)
+        if self.new_chain:
+            self.compute_old_chain_until(split_hash)
+            if len(self.new_chain) > len(self.old_chain):
+                for block in self.old_chain:
                     self.rollback_block(block)
                     self.deleted_txs.extend(block.get_transactions())
                 prev_block_hash = GENESIS_BLOCK_PREV
                 if self.blockchain:
                     prev_block_hash = self.blockchain[-1]
-                for block in new_chain:
+                for block in self.new_chain:
                     # if block.get_prev_block_hash() != prev_block_hash: #TODO reactivate
                     #     break
                     if not self.process_block(block):
@@ -45,10 +47,6 @@ class VirtualBlockchain:
         raise ValueError("Non-existing block")
 
     def is_known_block(self, block_hash: BlockHash) -> bool:
-        """
-        This function returns a block object given its hash.
-        If the block doesnt exist, a ValueError is raised.
-        """
         if block_hash == GENESIS_BLOCK_PREV:
             return True
         for block in self.blockchain:
@@ -56,18 +54,28 @@ class VirtualBlockchain:
                 return True
         return False
 
-    def get_unknown_chain(self, block_hash: BlockHash, sender: 'Node') -> List[Block]:  # TODO check
-        unknown_chain: List[Block] = []
+    def get_split_hash(self, block_hash: BlockHash, sender: 'Node') -> Optional[BlockHash]:  # TODO check
         current_block_hash: BlockHash = block_hash
         while not self.is_known_block(current_block_hash):
-            unknown_block: Block = sender.get_block(current_block_hash)
-            unknown_chain.append(unknown_block)
-            current_block_hash = unknown_block.get_prev_block_hash()
-            # if not self.validate_block(unknown_block):
-            #     unknown_chain = []
-            #     continue
-        unknown_chain.reverse()
-        return unknown_chain
+            try:
+                unknown_block: Block = sender.get_block(current_block_hash)
+                self.new_chain.append(unknown_block)
+                current_block_hash = unknown_block.get_prev_block_hash()
+                if current_block_hash is None:
+                    raise ValueError
+            except ValueError:
+                self.new_chain = []
+                return None
+        self.new_chain.reverse()
+        return current_block_hash
+
+    def compute_old_chain_until(self, split_block: BlockHash) -> None:
+        if not self.blockchain:
+            return
+        current_block: Block = self.blockchain[-1]
+        while not current_block.get_prev_block_hash() == GENESIS_BLOCK_PREV and not current_block.get_block_hash() == split_block:
+            self.old_chain.append(current_block)
+            current_block = self.get_block(current_block.get_prev_block_hash())
 
     def validate_block(self, block: Block) -> bool:
         if len(block.get_transactions()) > BLOCK_SIZE:
@@ -82,16 +90,6 @@ class VirtualBlockchain:
         if new_coin_counter != 1:
             return False
         return True
-
-    def get_chain_until(self, split_block: Block) -> List[Block]:
-        if not self.blockchain:
-            return []
-        current_block: Block = self.blockchain[-1]
-        chain: List[Block] = []
-        while not current_block.get_prev_block_hash() == GENESIS_BLOCK_PREV and not current_block.get_block_hash() == split_block.get_block_hash():
-            chain.append(current_block)
-            current_block = self.get_block(current_block.get_prev_block_hash())
-        return chain
 
     def rollback_block(self, block: Block) -> None:
         for canceled_tx in block.get_transactions():
