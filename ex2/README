@@ -1,0 +1,10 @@
+Name:   Benjamin Maman, Ilan Benhamou
+IDs:     341145811
+Users:   Benm
+
+Exercise 2
+
+This code implements a payment system based on the longest-chain protocol, replacing the trusted bank from the previous exercise.
+Each node manages its own copy of the blockchain and UTxO set, and can both mine new blocks and send/receive funds.
+Nodes communicate with each other and notify each other about new blocks and transactions. Block validation and chain-reorgs are also implemented.
+The code uses cryptography, hashlib, and secrets modules, and requires careful validation of blocks and transactions to prevent malicious attacks.
