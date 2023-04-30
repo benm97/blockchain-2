@@ -17,8 +17,6 @@ class Transaction:
         # do not change the name of this field:
         self.signature: Signature = signature
 
-        self.input_tx: Optional[Transaction] = None #TODO bad
-
     def get_txid(self) -> TxID:
         """Returns the identifier of this transaction. This is the SHA256 of the transaction contents."""
         return cast(TxID, hashlib.sha256(self.__toJson()).digest())

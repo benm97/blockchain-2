@@ -1,6 +1,6 @@
 import json
 import secrets
-from typing import Set, Optional, List, cast
+from typing import Set, Optional, List, cast, Dict
 
 from .block import Block
 from .transaction import Transaction
@@ -29,11 +29,10 @@ class Node:
         keys: Tuple[PrivateKey, PublicKey] = gen_keys()
         self.__private_key: PrivateKey = keys[0]
         self.__public_key: PublicKey = keys[1]
-
         self.__blockchain: List[Block] = []
         self.__mempool: List[Transaction] = []
         self.__utxo: List[Transaction] = []
-
+        self.__spent_txs: Dict[TxID, Transaction] = {}
         self.__connected_nodes: Set[Node] = set()
 
     def connect(self, other: 'Node') -> None:
@@ -100,11 +99,13 @@ class Node:
         not conflict.
         """
 
-        virtual_chain: VirtualBlockchain = VirtualBlockchain(self.__blockchain.copy(), self.__utxo.copy())
+        virtual_chain: VirtualBlockchain = VirtualBlockchain(self.__blockchain.copy(), self.__utxo.copy(),
+                                                             self.__spent_txs.copy())
         if len(virtual_chain.attempt_reorg(block_hash, sender)) > len(self.__blockchain):
             self.__blockchain = virtual_chain.blockchain
             self.__utxo = virtual_chain.utxo
-            mempool_backup = self.__mempool.copy()
+            self.__spent_txs = virtual_chain.spent_txs
+            mempool_backup: List[Transaction] = self.__mempool.copy()
             self.__mempool = []
             self.__mempool = [tx for tx in mempool_backup if self.__is_transaction_valid(tx)]
             for tx in virtual_chain.deleted_txs:
@@ -122,7 +123,7 @@ class Node:
         If a new block is created, all connections of this node are notified by calling their notify_of_block() method.
         The method returns the new block hash.
         """
-        last_index = BLOCK_SIZE - 1 if len(self.__mempool) > BLOCK_SIZE - 1 else len(self.__mempool)
+        last_index: int = BLOCK_SIZE - 1 if len(self.__mempool) > BLOCK_SIZE - 1 else len(self.__mempool)
         new_block: Block = Block(self.get_latest_hash(),
                                  self.__mempool[:last_index] + [new_coin_tx(self.get_address())])
         self.__blockchain.append(new_block)
@@ -176,13 +177,13 @@ class Node:
         """
         available_coin: Optional[Transaction] = next(
             (transaction for transaction in self.get_utxo() if
-             transaction.output == self.get_address() and transaction not in self.get_mempool()), None)
+             transaction.output == self.get_address() and transaction.get_txid() not in [tx.input for tx in
+                                                                                         self.get_mempool()]), None)
         if available_coin is None:
             return None
         signature: Signature = sign(json.dumps(build_message(available_coin, target), sort_keys=True).encode(),
                                     self.__private_key)
         tx: Transaction = Transaction(target, available_coin.get_txid(), signature)
-        tx.input_tx = available_coin
         self.add_transaction_to_mempool(tx)
         return tx
 
@@ -232,6 +233,9 @@ class Node:
         new_transactions: List[Transaction] = block.get_transactions()
         self.__utxo.extend(new_transactions)
         new_transactions_input: List[Optional[TxID]] = [transaction.input for transaction in new_transactions]
+        for tx in self.__utxo:
+            if tx.get_txid() in new_transactions_input:
+                self.__spent_txs[tx.get_txid()] = tx
         self.__utxo = [unspent_transaction for unspent_transaction in self.__utxo if
                        unspent_transaction.get_txid() not in new_transactions_input]
 
